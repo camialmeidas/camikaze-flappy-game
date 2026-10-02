@@ -1,0 +1,1180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CAMIKAZE - O Voo da Capitã Camila</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      background: #0a0a0a;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      overflow: hidden;
+      font-family: Arial, sans-serif;
+    }
+    canvas {
+      display: block;
+      border: 3px solid #FF1493;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="gameCanvas" width="480" height="640"></canvas>
+  <script>
+    // === AUDIO CONTEXT ===
+    let audioContext = null;
+    function getAudioContext() {
+      if (!audioContext) {
+        try {
+          audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        } catch (e) {}
+      }
+      return audioContext;
+    }
+
+    function playSound(type) {
+      try {
+        const ctx = getAudioContext();
+        if (!ctx) return;
+        
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        gain.gain.setValueAtTime(0.1, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.15);
+        
+        if (type === 'jump') {
+          osc.frequency.setValueAtTime(400, ctx.currentTime);
+          osc.frequency.exponentialRampToValueAtTime(600, ctx.currentTime + 0.05);
+          osc.start(ctx.currentTime);
+          osc.stop(ctx.currentTime + 0.1);
+        } else if (type === 'star') {
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(800, ctx.currentTime);
+          osc.frequency.exponentialRampToValueAtTime(1000, ctx.currentTime + 0.1);
+          osc.start(ctx.currentTime);
+          osc.stop(ctx.currentTime + 0.15);
+        } else if (type === 'powerup') {
+          osc.type = 'square';
+          osc.frequency.setValueAtTime(600, ctx.currentTime);
+          osc.start(ctx.currentTime);
+          osc.stop(ctx.currentTime + 0.1);
+        } else if (type === 'punch') {
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(150, ctx.currentTime);
+          osc.frequency.exponentialRampToValueAtTime(80, ctx.currentTime + 0.15);
+          osc.start(ctx.currentTime);
+          osc.stop(ctx.currentTime + 0.2);
+        } else if (type === 'gameOver') {
+          osc.type = 'sawtooth';
+          gain.gain.setValueAtTime(0.2, ctx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.02, ctx.currentTime + 0.8);
+          osc.frequency.setValueAtTime(350, ctx.currentTime);
+          osc.frequency.exponentialRampToValueAtTime(80, ctx.currentTime + 0.8);
+          osc.start(ctx.currentTime);
+          osc.stop(ctx.currentTime + 0.8);
+        }
+      } catch (e) {}
+    }
+
+    // === CONFIG ===
+    const CONFIG = {
+      canvas: { width: 480, height: 640 },
+      gravity: 800,
+      jumpVelocity: -300,
+      airplane: {
+        x: 80,
+        width: 36,
+        height: 28,
+        hitboxInset: 3
+      },
+      building: {
+        speed: 120,
+        gap: 140,
+        width: 50
+      },
+      dirigible: {
+        speed: 100,
+        width: 70,
+        height: 35
+      }
+    };
+
+    // === PARTICLE SYSTEM ===
+    function spawnParticles(x, y, count) {
+      for (let i = 0; i < count; i++) {
+        const angle = (Math.PI * 2 * i) / count;
+        gameState.particles.push({
+          x: x,
+          y: y,
+          vx: Math.cos(angle) * (80 + Math.random() * 60),
+          vy: Math.sin(angle) * (80 + Math.random() * 60),
+          life: 0.3,
+          maxLife: 0.3,
+          color: Math.random() > 0.5 ? '#FFDD00' : '#81D4FA'
+        });
+      }
+    }
+
+    function updateParticles(particles, dt) {
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.life -= dt;
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.vy += 200 * dt; // gravity
+        if (p.life <= 0) {
+          particles.splice(i, 1);
+        }
+      }
+    }
+
+    function drawParticles(ctx, particles) {
+      particles.forEach(p => {
+        const alpha = (p.life / p.maxLife) * 0.8;
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = p.color;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      });
+    }
+
+    // === ARCADE HUD PANEL ===
+    function drawHUDPanel(ctx) {
+      const panelX = 15;
+      const panelY = 15;
+      const panelWidth = 180;
+      const panelHeight = 85;
+
+      // Fundo semi-transparente
+      ctx.save();
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+      ctx.fillRect(panelX, panelY, panelWidth, panelHeight);
+
+      // Borda rosa neon fina
+      ctx.strokeStyle = '#FF1493';
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(panelX, panelY, panelWidth, panelHeight);
+
+      // Texto
+      ctx.fillStyle = '#FFFFFF';
+      ctx.font = 'bold 11px Arial';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+
+      ctx.fillText('PONTOS: ' + gameState.score, panelX + 8, panelY + 8);
+      ctx.fillText('RECORDE: ' + gameState.highScore, panelX + 8, panelY + 24);
+
+      // Status
+      let statusText = 'STATUS: Normal';
+      let statusColor = '#00FF00';
+      if (gameState.punchShieldActive) {
+        statusText = 'ESCUDO: ' + gameState.punchShieldTimer.toFixed(1) + 's';
+        statusColor = '#5B9BD5';
+      } else if (gameState.magnetActive) {
+        statusText = 'ÍMÃ: ' + gameState.magnetTimer.toFixed(1) + 's';
+        statusColor = '#D32F2F';
+      }
+
+      ctx.fillStyle = statusColor;
+      ctx.font = 'bold 10px Arial';
+      ctx.fillText(statusText, panelX + 8, panelY + 42);
+
+      // Info extra
+      ctx.fillStyle = '#AAAAAA';
+      ctx.font = '9px Arial';
+      ctx.fillText('Velocidade: ' + gameState.currentSpeed.toFixed(1), panelX + 8, panelY + 60);
+
+      ctx.restore();
+    }
+
+    // === SVG ASSETS ===
+    const imgPlaneVintage = new Image();
+    imgPlaneVintage.src = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50"><path d="M10,25 Q30,10 80,25 Q30,40 10,25" fill="%23556B2F"/><path d="M40,10 L45,20 L55,20 L60,10 Z" fill="%23A9A9A9"/><path d="M10,15 L15,25 L10,35 Z" fill="%23333"/><ellipse cx="85" cy="25" rx="5" ry="15" fill="%23C0C0C0" opacity="0.8"/></svg>';
+
+    const imgPlaneJet = new Image();
+    imgPlaneJet.src = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50"><path d="M5,25 L30,20 L80,25 L30,30 Z" fill="%234682B4"/><path d="M25,20 L40,5 L50,20 Z" fill="%231E90FF"/><path d="M25,30 L40,45 L50,30 Z" fill="%231E90FF"/><path d="M5,15 L15,25 L5,35 Z" fill="%23000080"/><ellipse cx="60" cy="23" rx="8" ry="4" fill="%2387CEEB"/></svg>';
+
+    const imgHelicopter = new Image();
+    imgHelicopter.src = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50"><path d="M20,25 L40,20 L70,25 L40,35 Z" fill="%2300E5FF"/><path d="M10,23 L20,23 L20,27 L10,27 Z" fill="%2300E5FF"/><rect x="40" y="10" width="4" height="10" fill="%23FFFFFF"/><path d="M10,10 L90,10 L90,12 L10,12 Z" fill="%23FFFF00"/><rect x="55" y="22" width="10" height="7" fill="%23FFFFFF"/><circle cx="60" cy="25" r="2" fill="%23000"/></svg>';
+
+    const imgZeppelin = new Image();
+    imgZeppelin.src = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 80"><ellipse cx="100" cy="40" rx="80" ry="30" fill="%238B7365"/><path d="M20,40 Q100,10 180,40 Q100,70 20,40" fill="%236E5C53"/><path d="M10,30 L25,35 L25,45 L10,50 Z" fill="%23D2B48C"/><path d="M90,68 L110,68 L105,75 L95,75 Z" fill="%23333"/><line x1="20" y1="40" x2="180" y2="40" stroke="%23333" stroke-width="1"/></svg>';
+
+    // === PLANE COLORS ===
+    const PLANES = {
+      red: { name: 'Vintage Militar', bodyColor: '#E53935', accentColor: '#FFFFFF', accentColor2: null, label: 'A', image: imgPlaneVintage },
+      pink: { name: 'Caça Supersônico', bodyColor: '#FF1493', accentColor: '#FFFFFF', accentColor2: '#81D4FA', label: 'B', image: imgPlaneJet },
+      yellow: { name: 'Heli-Patrulha', bodyColor: '#FFD700', accentColor: '#FFA500', accentColor2: null, label: 'C', image: imgHelicopter }
+    };
+
+    // === CANVAS SETUP ===
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    if (!ctx) {
+      document.body.innerHTML = '<p style="color:white;text-align:center;margin-top:40vh;">Navegador não suporta Canvas.</p>';
+    }
+
+    // === PERSISTENCE ===
+    function loadHighScore() {
+      try {
+        const val = parseInt(localStorage.getItem('camikazeHigh') || '0');
+        return isNaN(val) ? 0 : val;
+      } catch (e) {
+        return 0;
+      }
+    }
+
+    function saveHighScore(score) {
+      try {
+        localStorage.setItem('camikazeHigh', String(score));
+      } catch (e) {}
+    }
+
+    // === GAME STATE ===
+    let gameState = {
+      status: 'planeSelect',
+      score: 0,
+      highScore: loadHighScore(),
+      selectedPlaneColor: 'red',
+      currentSpeed: 120,
+      airplane: {
+        x: CONFIG.airplane.x,
+        y: CONFIG.canvas.height / 2,
+        width: CONFIG.airplane.width,
+        height: CONFIG.airplane.height,
+        velocity: 0
+      },
+      buildings: [],
+      dirigibles: [],
+      stars: [],
+      powerups: [],
+      particles: [],
+      zeppelin: { x: 800, y: 50, speed: 0.8, width: 70, height: 30 },
+      waveOffset: 0,
+      shakeTimer: 0,
+      shakeIntensity: 6,
+      punchShieldActive: false,
+      punchShieldTimer: 0,
+      magnetActive: false,
+      magnetTimer: 0,
+      distanceSinceLastSpawn: 0,
+      backgroundStars: generateBackgroundStars(30)
+    };
+
+    function generateBackgroundStars(count) {
+      const stars = [];
+      for (let i = 0; i < count; i++) {
+        stars.push({
+          x: Math.random() * CONFIG.canvas.width,
+          y: Math.random() * (CONFIG.canvas.height * 0.5),
+          radius: Math.random() * 0.8 + 0.3,
+          opacity: Math.random() * 0.4 + 0.3
+        });
+      }
+      return stars;
+    }
+
+    // === PLANE SELECTOR ===
+    function drawPlaneSelector(ctx) {
+      const w = CONFIG.canvas.width;
+      const h = CONFIG.canvas.height;
+
+      // Background
+      const gradient = ctx.createLinearGradient(0, 0, 0, h);
+      gradient.addColorStop(0, '#0a0a23');
+      gradient.addColorStop(0.5, '#141428');
+      gradient.addColorStop(1, '#0a0a1a');
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, w, h);
+
+      // Stars
+      ctx.fillStyle = '#FFFFFF';
+      gameState.backgroundStars.forEach(star => {
+        ctx.globalAlpha = star.opacity;
+        ctx.beginPath();
+        ctx.arc(star.x, star.y, star.radius, 0, Math.PI * 2);
+        ctx.fill();
+      });
+      ctx.globalAlpha = 1;
+
+      // Title
+      ctx.fillStyle = '#FF1493';
+      ctx.font = 'bold 44px Arial';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      ctx.fillText('ESCOLHA SEU AVIÃO', w / 2, 30);
+
+      // Plane options
+      const boxWidth = 130;
+      const boxHeight = 160;
+      const startX = (w - (boxWidth * 3 + 20)) / 2;
+      const startY = 110;
+
+      Object.entries(PLANES).forEach((entry, idx) => {
+        const [key, plane] = entry;
+        const boxX = startX + idx * (boxWidth + 10);
+        const boxY = startY;
+
+        // Box background
+        ctx.fillStyle = '#1a1a2e';
+        ctx.fillRect(boxX, boxY, boxWidth, boxHeight);
+        ctx.strokeStyle = plane.bodyColor;
+        ctx.lineWidth = 2;
+        ctx.strokeRect(boxX, boxY, boxWidth, boxHeight);
+
+        // Plane name - BOLD, HIGH CONTRAST
+        ctx.fillStyle = '#FFFFFF';
+        ctx.font = 'bold 13px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+        
+        // Shadow para melhor legibilidade
+        ctx.fillStyle = '#000000';
+        ctx.fillText(plane.name, boxX + boxWidth / 2 + 1, boxY + 8 + 1);
+        
+        // Texto principal em branco
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillText(plane.name, boxX + boxWidth / 2, boxY + 8);
+
+        // SVG Aircraft Preview - Large and Clear (80x40px)
+        ctx.save();
+        ctx.translate(boxX + boxWidth / 2 - 40, boxY + 50);
+        if (plane && plane.image && plane.image.complete) {
+          ctx.drawImage(plane.image, 0, 0, 80, 40);
+        }
+        ctx.restore();
+
+        // Label
+        ctx.fillStyle = '#FFFFFF';
+        ctx.font = 'bold 14px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText(plane.label, boxX + boxWidth / 2, boxY + 135);
+
+        // Click instruction
+        ctx.fillStyle = '#AAAAAA';
+        ctx.font = '10px Arial';
+        ctx.fillText('Clique', boxX + boxWidth / 2, boxY + 148);
+      });
+
+      // Instructions
+      ctx.fillStyle = '#FFFFFF';
+      ctx.font = '14px Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText('Ou pressione ESPAÇO para começar', w / 2, h - 40);
+    }
+
+    // === SVG AIRCRAFT RENDERING ===
+    function drawJet(ctx, x, y, width, height, tilt, color, accentColor, accentColor2) {
+      const plane = PLANES[gameState.selectedPlaneColor];
+      
+      ctx.save();
+      ctx.translate(x + width / 2, y + height / 2);
+      ctx.rotate(tilt);
+      
+      // Draw SVG image centered
+      if (plane && plane.image && plane.image.complete) {
+        ctx.drawImage(plane.image, -width / 2, -height / 2, width, height);
+      }
+      
+      ctx.restore();
+    }
+
+    // === BACKGROUND ===
+    function drawBackgroundNight(ctx) {
+      const w = CONFIG.canvas.width;
+      const h = CONFIG.canvas.height;
+
+      // Céu gradiente
+      const gradient = ctx.createLinearGradient(0, 0, 0, h);
+      gradient.addColorStop(0, '#0a0a23');
+      gradient.addColorStop(0.5, '#141428');
+      gradient.addColorStop(1, '#0a0a1a');
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, w, h);
+
+      // Lua
+      ctx.fillStyle = '#F5DEB3';
+      ctx.globalAlpha = 0.7;
+      ctx.beginPath();
+      ctx.arc(w - 50, 50, 35, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+
+      // Estrelas de fundo
+      ctx.fillStyle = '#FFFFFF';
+      gameState.backgroundStars.forEach(star => {
+        ctx.globalAlpha = star.opacity;
+        ctx.beginPath();
+        ctx.arc(star.x, star.y, star.radius, 0, Math.PI * 2);
+        ctx.fill();
+      });
+      ctx.globalAlpha = 1;
+    }
+
+    // === ZEPPELIN WITH BANNER ===
+    function drawZeppelin(ctx, x, y) {
+      const z = gameState.zeppelin;
+      if (!z) return;
+
+      ctx.save();
+
+      // SVG zeppelin image
+      if (imgZeppelin && imgZeppelin.complete) {
+        ctx.drawImage(imgZeppelin, z.x - 80, z.y - 30, 160, 60);
+      }
+
+      // Banner rosa ATRÁS (à esquerda) do zeppelin
+      const bannerWidth = 240;
+      const bannerHeight = 24;
+      const bannerX = z.x - bannerWidth - 25;
+      const bannerY = z.y + 3;
+
+      // Corda cinza fina conectando traseira do zeppelin à frente do banner
+      ctx.strokeStyle = '#aaa';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(z.x - 10, z.y + 15);
+      ctx.lineTo(bannerX + bannerWidth, bannerY + 12);
+      ctx.stroke();
+
+      // Banner rosa
+      ctx.fillStyle = '#FF1493';
+      ctx.fillRect(bannerX, bannerY, bannerWidth, bannerHeight);
+
+      // Borda do banner
+      ctx.strokeStyle = '#DD0088';
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(bannerX, bannerY, bannerWidth, bannerHeight);
+
+      // Texto do banner em branco
+      ctx.fillStyle = '#FFFFFF';
+      ctx.font = 'bold 12px Arial';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('★ CAMIKAZE ★ PILOTA: CAPITÃ CAMILA', bannerX + bannerWidth / 2, bannerY + bannerHeight / 2);
+
+      ctx.restore();
+    }
+
+    // === UPDATE ZEPPELIN ===
+    function updateZeppelin(zeppelin, dt, speed) {
+      gameState.zeppelin.x -= gameState.zeppelin.speed;
+      if (gameState.zeppelin.x < -320) {
+        gameState.zeppelin.x = CONFIG.canvas.width + 100;
+      }
+    }
+    function drawNeonHeader(ctx) {
+      // Header removed - zeppelin banner takes its place
+    }
+
+    // === OBSTACLES ===
+    function drawBuilding(ctx, building) {
+      const b = building;
+      const topH = b.gapY - b.gap / 2;
+      const bottomY = b.gapY + b.gap / 2;
+
+      // Prédio superior (transformado em Drone Futurista)
+      ctx.save();
+      ctx.fillStyle = '#1a2a4a';
+      ctx.fillRect(b.x, 0, b.width, topH);
+      
+      // Detalhes futuristas - painel central com grades
+      ctx.strokeStyle = '#2a4a6a';
+      ctx.lineWidth = 1;
+      for (let i = 0; i < topH; i += 12) {
+        ctx.beginPath();
+        ctx.moveTo(b.x, i);
+        ctx.lineTo(b.x + b.width, i);
+        ctx.stroke();
+      }
+      
+      // Luzes vermelhas piscantes no topo (sinal de aviso)
+      const blink = Math.sin(gameState.waveOffset * 8) > 0 ? 1 : 0.3;
+      ctx.fillStyle = `rgba(255, 0, 0, ${blink})`;
+      ctx.beginPath();
+      ctx.arc(b.x + 8, 8, 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(b.x + b.width - 8, 8, 4, 0, Math.PI * 2);
+      ctx.fill();
+      
+      ctx.restore();
+
+      // Prédio inferior
+      ctx.fillStyle = '#1a1a2e';
+      ctx.fillRect(b.x, bottomY, b.width, CONFIG.canvas.height - bottomY);
+      ctx.strokeStyle = '#2a2a4a';
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(b.x, bottomY, b.width, CONFIG.canvas.height - bottomY);
+
+      // Janelas amarelas
+      ctx.fillStyle = '#FFDD00';
+      const bottomHeight = CONFIG.canvas.height - bottomY;
+      for (let row = 0; row < Math.floor(bottomHeight / 14); row++) {
+        for (let col = 0; col < 2; col++) {
+          if (Math.random() > 0.25) {
+            ctx.fillRect(b.x + 6 + col * 20, bottomY + 6 + row * 14, 8, 8);
+          }
+        }
+      }
+    }
+
+    function drawDirigible(ctx, dirigible) {
+      // Dirigibles removed - clean obstacles only
+    }
+
+    function drawStar(ctx, star) {
+      const pulse = Math.sin(star.pulse) * 0.25 + 0.75;
+      ctx.save();
+      ctx.translate(star.x, star.y);
+      ctx.scale(pulse, pulse);
+
+      ctx.fillStyle = '#FFDD00';
+      ctx.beginPath();
+      for (let i = 0; i < 5; i++) {
+        const angle = (i * 4 * Math.PI) / 5 - Math.PI / 2;
+        const radius = star.size;
+        const sx = Math.cos(angle) * radius;
+        const sy = Math.sin(angle) * radius;
+        if (i === 0) ctx.moveTo(sx, sy);
+        else ctx.lineTo(sx, sy);
+      }
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.strokeStyle = '#FFAA00';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      ctx.restore();
+    }
+
+    function drawPowerup(ctx, powerup) {
+      const pulse = Math.sin(powerup.pulse) * 0.3 + 0.8;
+      ctx.save();
+      ctx.translate(powerup.x, powerup.y);
+      ctx.scale(pulse, pulse);
+
+      if (powerup.type === 'punch') {
+        ctx.fillStyle = '#5B9BD5';
+        ctx.beginPath();
+        ctx.arc(0, 0, powerup.size, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#2F5496';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(-3, -3, 6, 8);
+        ctx.beginPath();
+        ctx.arc(-3, -4, 2, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (powerup.type === 'magnet') {
+        ctx.fillStyle = '#D32F2F';
+        ctx.beginPath();
+        ctx.moveTo(-powerup.size, -powerup.size);
+        ctx.lineTo(powerup.size, -powerup.size);
+        ctx.lineTo(powerup.size * 0.8, powerup.size * 0.8);
+        ctx.lineTo(-powerup.size * 0.8, powerup.size * 0.8);
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = '#B71C1C';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        ctx.fillStyle = '#FFFFFF';
+        ctx.font = 'bold 6px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('N', 0, -3);
+        ctx.fillText('S', 0, 3);
+      }
+
+      ctx.restore();
+    }
+
+    // === POWER-UP EFFECTS ===
+    function drawPunchShield(ctx, airplane, active) {
+      if (!active) return;
+
+      const plane = PLANES[gameState.selectedPlaneColor];
+      
+      // Bolha de energia vermelha
+      ctx.save();
+      ctx.globalAlpha = 0.3;
+      ctx.strokeStyle = '#FF6B6B';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(airplane.x + airplane.width / 2, airplane.y + airplane.height / 2, airplane.width * 0.65, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+
+      // Luva de impacto gigante na frente
+      ctx.fillStyle = '#FF6B6B';
+      ctx.globalAlpha = 0.8;
+      const fistX = airplane.x + airplane.width + 8;
+      const fistY = airplane.y + airplane.height / 2;
+      ctx.beginPath();
+      ctx.arc(fistX, fistY, 12, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+
+      ctx.restore();
+    }
+
+    function drawMagnetEffect(ctx, airplane, active) {
+      if (!active) return;
+
+      ctx.save();
+      const pulse = Math.sin(gameState.waveOffset * 4) * 0.2 + 0.8;
+
+      for (let ring = 0; ring < 3; ring++) {
+        const radius = (airplane.width * 0.5) + (ring * 8) * pulse;
+        ctx.strokeStyle = `rgba(91, 155, 213, ${0.5 - ring * 0.1})`;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(airplane.x + airplane.width / 2, airplane.y + airplane.height / 2, radius, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      ctx.restore();
+    }
+
+    // === SPAWNING ===
+    function spawnBuilding() {
+      const gapY = 100 + Math.random() * (CONFIG.canvas.height - 280);
+      return {
+        x: CONFIG.canvas.width,
+        y: gapY - CONFIG.building.gap / 2,
+        gapY: gapY,
+        gap: CONFIG.building.gap,
+        width: CONFIG.building.width,
+        height: 300,
+        passed: false
+      };
+    }
+
+    function spawnDirigible() {
+      const y = 30 + Math.random() * 180;
+      return {
+        x: CONFIG.canvas.width,
+        y: y,
+        width: CONFIG.dirigible.width,
+        height: CONFIG.dirigible.height,
+        passed: false
+      };
+    }
+
+    function spawnStar(x, gapY) {
+      return {
+        x: x + Math.random() * 30 - 15,
+        y: gapY + Math.random() * 50 - 25,
+        size: 5,
+        collected: false,
+        pulse: Math.random() * Math.PI * 2
+      };
+    }
+
+    function spawnPowerup(x, gapY, type) {
+      return {
+        x: x + Math.random() * 30 - 15,
+        y: gapY + Math.random() * 60 - 30,
+        size: 10,
+        type: type,
+        collected: false,
+        pulse: Math.random() * Math.PI * 2
+      };
+    }
+
+    // === PHYSICS ===
+    function updateAirplane(airplane, dt) {
+      airplane.velocity += CONFIG.gravity * dt;
+      airplane.velocity = Math.min(airplane.velocity, 600);
+      airplane.y += airplane.velocity * dt;
+    }
+
+    function jumpAirplane(airplane) {
+      airplane.velocity = CONFIG.jumpVelocity;
+      playSound('jump');
+    }
+
+    // === UPDATES ===
+    function updateBuildings(buildings, dt, speed) {
+      for (let i = buildings.length - 1; i >= 0; i--) {
+        buildings[i].x -= speed * dt;
+        if (buildings[i].x + buildings[i].width < 0) {
+          buildings.splice(i, 1);
+        }
+      }
+    }
+
+    function updateDirigibles(dirigibles, dt, speed) {
+      for (let i = dirigibles.length - 1; i >= 0; i--) {
+        dirigibles[i].x -= speed * dt;
+        if (dirigibles[i].x + dirigibles[i].width < 0) {
+          dirigibles.splice(i, 1);
+        }
+      }
+    }
+
+    function updateStars(stars, magnet, airplaneX, airplaneY, dt, speed) {
+      for (let i = stars.length - 1; i >= 0; i--) {
+        const s = stars[i];
+        s.x -= speed * dt;
+        s.pulse += dt * 3;
+
+        if (magnet) {
+          const dx = airplaneX - s.x;
+          const dy = airplaneY - s.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < 200) {
+            const speed = 180;
+            s.x += (dx / (dist + 1)) * speed * dt;
+            s.y += (dy / (dist + 1)) * speed * dt;
+          }
+        }
+
+        if (s.x < -10 || s.x > CONFIG.canvas.width + 10) {
+          stars.splice(i, 1);
+        }
+      }
+    }
+
+    function updatePowerups(powerups, dt, speed) {
+      for (let i = powerups.length - 1; i >= 0; i--) {
+        powerups[i].x -= speed * dt;
+        powerups[i].pulse += dt * 2;
+        if (powerups[i].x < -15 || powerups[i].x > CONFIG.canvas.width + 15) {
+          powerups.splice(i, 1);
+        }
+      }
+    }
+
+    // === COLLISIONS ===
+    function checkBuildingCollision(airplane, buildings, punchActive) {
+      const inset = CONFIG.airplane.hitboxInset;
+      const ax = airplane.x + inset;
+      const ay = airplane.y + inset;
+      const aw = airplane.width - 2 * inset;
+      const ah = airplane.height - 2 * inset;
+
+      for (let i = 0; i < buildings.length; i++) {
+        const b = buildings[i];
+        const topH = b.gapY - b.gap / 2;
+        const bottomY = b.gapY + b.gap / 2;
+
+        if (ax < b.x + b.width && ax + aw > b.x && ay < topH && ay + ah > 0) {
+          if (punchActive) {
+            buildings.splice(i, 1);
+            playSound('punch');
+            return { collision: false, destroyed: true };
+          }
+          return { collision: true };
+        }
+
+        if (ax < b.x + b.width && ax + aw > b.x && ay < bottomY + 200 && ay + ah > bottomY) {
+          if (punchActive) {
+            buildings.splice(i, 1);
+            playSound('punch');
+            return { collision: false, destroyed: true };
+          }
+          return { collision: true };
+        }
+      }
+
+      return { collision: false };
+    }
+
+    function checkDirigibleCollision(airplane, dirigibles) {
+      // Dirigible collision removed
+      return false;
+    }
+
+    function checkBuildingPass(airplane, buildings) {
+      let count = 0;
+      for (let i = 0; i < buildings.length; i++) {
+        if (!buildings[i].passed && airplane.x > buildings[i].x + buildings[i].width) {
+          buildings[i].passed = true;
+          count++;
+        }
+      }
+      return count;
+    }
+
+    function checkStarCollection(airplane, stars) {
+      const ax = airplane.x;
+      const ay = airplane.y;
+      const aw = airplane.width;
+      const ah = airplane.height;
+
+      for (let i = stars.length - 1; i >= 0; i--) {
+        const s = stars[i];
+        const sx = s.x;
+        const sy = s.y;
+        const sr = s.size + 6;
+        
+        // AABB check: airplane rect vs star circle
+        if (ax < sx + sr && ax + aw > sx - sr && ay < sy + sr && ay + ah > sy - sr) {
+          // Spawn particles at collection point
+          spawnParticles(sx, sy, 8);
+          stars.splice(i, 1);
+          playSound('star');
+          return 5;
+        }
+      }
+      return 0;
+    }
+
+    function checkPowerupCollection(airplane, powerups) {
+      const ax = airplane.x;
+      const ay = airplane.y;
+      const aw = airplane.width;
+      const ah = airplane.height;
+
+      for (let i = powerups.length - 1; i >= 0; i--) {
+        const p = powerups[i];
+        const pr = p.size + 8;
+        
+        // AABB check: airplane rect vs powerup circle
+        if (ax < p.x + pr && ax + aw > p.x - pr && ay < p.y + pr && ay + ah > p.y - pr) {
+          // Spawn particles at collection point
+          spawnParticles(p.x, p.y, 10);
+          const type = p.type;
+          powerups.splice(i, 1);
+          playSound('powerup');
+          return type;
+        }
+      }
+      return null;
+    }
+
+    // === RENDER ===
+    function render(ctx, state) {
+      const w = CONFIG.canvas.width;
+      const h = CONFIG.canvas.height;
+
+      if (state.status === 'planeSelect') {
+        drawPlaneSelector(ctx);
+        return;
+      }
+
+      ctx.save();
+
+      // Screen shake
+      if (state.shakeTimer > 0) {
+        const factor = state.shakeTimer / 0.3;
+        const ox = (Math.random() - 0.5) * state.shakeIntensity * factor;
+        const oy = (Math.random() - 0.5) * state.shakeIntensity * factor;
+        ctx.translate(ox, oy);
+      }
+
+      // Background
+      drawBackgroundNight(ctx);
+
+      // Obstacles
+      state.buildings.forEach(b => drawBuilding(ctx, b));
+
+      // Zeppelin with banner
+      drawZeppelin(ctx, 0, 0);
+
+      // Collectibles
+      state.stars.forEach(s => drawStar(ctx, s));
+      state.powerups.forEach(p => drawPowerup(ctx, p));
+
+      // Airplane with plane color
+      const plane = PLANES[state.selectedPlaneColor];
+      const tilt = Math.max(-0.4, Math.min(0.6, state.airplane.velocity * 0.0018));
+      drawJet(ctx, state.airplane.x, state.airplane.y, CONFIG.airplane.width, CONFIG.airplane.height, tilt, plane.bodyColor, plane.accentColor, plane.accentColor2);
+
+      // Power-up effects
+      drawPunchShield(ctx, state.airplane, state.punchShieldActive);
+      drawMagnetEffect(ctx, state.airplane, state.magnetActive);
+
+      ctx.restore();
+
+      // Particles
+      drawParticles(ctx, state.particles);
+
+      // Arcade HUD Panel
+      drawHUDPanel(ctx);
+
+      // Game over screen
+      if (state.status === 'gameOver') {
+        ctx.fillStyle = 'rgba(10, 10, 26, 0.85)';
+        ctx.fillRect(0, 0, w, h);
+
+        ctx.fillStyle = '#FF1493';
+        ctx.font = 'bold 44px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('DERROTA!', w / 2, h / 2 - 50);
+
+        ctx.fillStyle = '#FFFFFF';
+        ctx.font = '18px Arial';
+        ctx.fillText(`Pontuação: ${state.score}`, w / 2, h / 2 + 10);
+        ctx.fillText(`Recorde: ${state.highScore}`, w / 2, h / 2 + 35);
+
+        const pulse = 0.7 + 0.3 * Math.sin(Date.now() * 0.003 * 3);
+        ctx.globalAlpha = pulse;
+        ctx.font = 'bold 14px Arial';
+        ctx.fillText('Pressione ESPAÇO para continuar', w / 2, h / 2 + 100);
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    // === GAME LOOP ===
+    let rafId = null;
+    let lastTimestamp = 0;
+    let gameOverTime = 0;
+
+    function resetGameState() {
+      gameState.score = 0;
+      gameState.currentSpeed = 120;
+      gameState.airplane.x = CONFIG.airplane.x;
+      gameState.airplane.y = CONFIG.canvas.height / 2;
+      gameState.airplane.velocity = 0;
+      gameState.buildings.length = 0;
+      gameState.dirigibles.length = 0;
+      gameState.stars.length = 0;
+      gameState.powerups.length = 0;
+      gameState.particles.length = 0;
+      gameState.zeppelin.x = CONFIG.canvas.width + 100;
+      gameState.zeppelin.y = 50;
+      gameState.punchShieldActive = false;
+      gameState.punchShieldTimer = 0;
+      gameState.magnetActive = false;
+      gameState.magnetTimer = 0;
+      gameState.distanceSinceLastSpawn = 0;
+      gameState.waveOffset = 0;
+      gameState.shakeTimer = 0;
+    }
+
+    function gameLoop(timestamp) {
+      if (gameState.status !== 'playing') return;
+
+      const dt = Math.min((timestamp - lastTimestamp) / 1000, 0.04);
+      lastTimestamp = timestamp;
+
+      gameState.waveOffset += dt * 2;
+
+      // Progressive difficulty - increase speed every 10 points
+      gameState.currentSpeed = 120 + Math.floor(gameState.score / 10) * 0.25;
+
+      // Update airplane
+      updateAirplane(gameState.airplane, dt);
+
+      // Update zeppelin
+      updateZeppelin(null, dt, null);
+
+      // Spawn obstacles
+      gameState.distanceSinceLastSpawn += gameState.currentSpeed * dt;
+      if (gameState.distanceSinceLastSpawn >= 280) {
+        const newBuilding = spawnBuilding();
+        gameState.buildings.push(newBuilding);
+
+        if (Math.random() < 0.65) {
+          gameState.stars.push(spawnStar(CONFIG.canvas.width, newBuilding.gapY));
+        }
+
+        if (Math.random() < 0.30) {
+          const type = Math.random() < 0.5 ? 'punch' : 'magnet';
+          gameState.powerups.push(spawnPowerup(CONFIG.canvas.width, newBuilding.gapY, type));
+        }
+
+        gameState.distanceSinceLastSpawn = 0;
+      }
+
+      // Update entities with current speed
+      updateBuildings(gameState.buildings, dt, gameState.currentSpeed);
+      updateDirigibles(gameState.dirigibles, dt, gameState.currentSpeed);
+      updateStars(gameState.stars, gameState.magnetActive, gameState.airplane.x, gameState.airplane.y, dt, gameState.currentSpeed);
+      updatePowerups(gameState.powerups, dt, gameState.currentSpeed);
+      updateParticles(gameState.particles, dt);
+
+      // Update timers
+      if (gameState.punchShieldTimer > 0) {
+        gameState.punchShieldTimer -= dt;
+      } else {
+        gameState.punchShieldActive = false;
+      }
+
+      if (gameState.magnetTimer > 0) {
+        gameState.magnetTimer -= dt;
+      } else {
+        gameState.magnetActive = false;
+      }
+
+      if (gameState.shakeTimer > 0) {
+        gameState.shakeTimer -= dt;
+      }
+
+      // Collisions
+      
+      // Check floor and ceiling
+      const bottomLimit = CONFIG.canvas.height - 25;
+      if (gameState.airplane.y + gameState.airplane.height >= bottomLimit || gameState.airplane.y >= CONFIG.canvas.height) {
+        playSound('gameOver');
+        gameState.status = 'gameOver';
+        gameOverTime = Date.now();
+        gameState.highScore = Math.max(gameState.score, gameState.highScore);
+        saveHighScore(gameState.highScore);
+        gameState.shakeTimer = 0.3;
+        cancelAnimationFrame(rafId);
+        rafId = requestAnimationFrame(idleLoop);
+        return;
+      }
+
+      // Check ceiling - just trap position, no game over
+      if (gameState.airplane.y <= 0) {
+        gameState.airplane.y = 0;
+        if (gameState.airplane.velocity < 0) {
+          gameState.airplane.velocity = 0;
+        }
+      }
+
+      const buildingCol = checkBuildingCollision(gameState.airplane, gameState.buildings, gameState.punchShieldActive);
+      if (buildingCol.collision) {
+        playSound('gameOver');
+        gameState.status = 'gameOver';
+        gameOverTime = Date.now();
+        gameState.highScore = Math.max(gameState.score, gameState.highScore);
+        saveHighScore(gameState.highScore);
+        gameState.shakeTimer = 0.3;
+        cancelAnimationFrame(rafId);
+        rafId = requestAnimationFrame(idleLoop);
+        return;
+      }
+
+      if (buildingCol.destroyed) {
+        gameState.punchShieldActive = false;
+        gameState.punchShieldTimer = 0;
+      }
+
+      if (checkDirigibleCollision(gameState.airplane, gameState.dirigibles)) {
+        playSound('gameOver');
+        gameState.status = 'gameOver';
+        gameOverTime = Date.now();
+        gameState.highScore = Math.max(gameState.score, gameState.highScore);
+        saveHighScore(gameState.highScore);
+        gameState.shakeTimer = 0.3;
+        cancelAnimationFrame(rafId);
+        rafId = requestAnimationFrame(idleLoop);
+        return;
+      }
+
+      // Scoring
+      if (gameState.status === 'playing') {
+        const passed = checkBuildingPass(gameState.airplane, gameState.buildings);
+        if (passed > 0) {
+          gameState.score += passed * 10;
+        }
+
+        const starPoints = checkStarCollection(gameState.airplane, gameState.stars);
+        if (starPoints > 0) {
+          gameState.score += starPoints;
+        }
+
+        const powerupType = checkPowerupCollection(gameState.airplane, gameState.powerups);
+        if (powerupType === 'punch') {
+          gameState.punchShieldActive = true;
+          gameState.punchShieldTimer = 8;
+        } else if (powerupType === 'magnet') {
+          gameState.magnetActive = true;
+          gameState.magnetTimer = 8;
+        }
+      }
+
+      render(ctx, gameState);
+      rafId = requestAnimationFrame(gameLoop);
+    }
+
+    function idleLoop(timestamp) {
+      if (gameState.status !== 'planeSelect' && gameState.status !== 'gameOver') return;
+
+      const dt = Math.min((timestamp - lastTimestamp) / 1000, 0.04);
+      lastTimestamp = timestamp;
+
+      gameState.waveOffset += dt * 2;
+
+      if (gameState.shakeTimer > 0) {
+        gameState.shakeTimer -= dt;
+      }
+
+      render(ctx, gameState);
+      rafId = requestAnimationFrame(idleLoop);
+    }
+
+    // === INPUT ===
+    function handleInput(e) {
+      if (gameState.status === 'planeSelect') {
+        if (e.type === 'click') {
+          const rect = canvas.getBoundingClientRect();
+          const clickX = e.clientX - rect.left;
+          const clickY = e.clientY - rect.top;
+
+          const boxWidth = 130;
+          const boxHeight = 160;
+          const startX = (CONFIG.canvas.width - (boxWidth * 3 + 20)) / 2;
+          const startY = 110;
+
+          const colors = ['red', 'pink', 'yellow'];
+          colors.forEach((color, idx) => {
+            const boxX = startX + idx * (boxWidth + 10);
+            const boxY = startY;
+            if (clickX >= boxX && clickX <= boxX + boxWidth && clickY >= boxY && clickY <= boxY + boxHeight) {
+              gameState.selectedPlaneColor = color;
+              resetGameState();
+              gameState.status = 'playing';
+              lastTimestamp = performance.now();
+              if (rafId) cancelAnimationFrame(rafId);
+              rafId = requestAnimationFrame(gameLoop);
+            }
+          });
+        }
+      }
+
+      if (e.type === 'keydown' && e.code !== 'Space') return;
+      if (e.code === 'Space') e.preventDefault();
+      if (e.type === 'touchstart') e.preventDefault();
+
+      if (gameState.status === 'planeSelect') {
+        gameState.status = 'playing';
+        resetGameState();
+        lastTimestamp = performance.now();
+        if (rafId) cancelAnimationFrame(rafId);
+        rafId = requestAnimationFrame(gameLoop);
+      } else if (gameState.status === 'playing') {
+        jumpAirplane(gameState.airplane);
+      } else if (gameState.status === 'gameOver') {
+        if (Date.now() - gameOverTime < 400) return;
+        gameState.status = 'planeSelect';
+        lastTimestamp = performance.now();
+        if (rafId) cancelAnimationFrame(rafId);
+        rafId = requestAnimationFrame(idleLoop);
+      }
+    }
+
+    document.addEventListener('keydown', handleInput);
+    canvas.addEventListener('click', handleInput);
+    canvas.addEventListener('touchstart', handleInput);
+
+    lastTimestamp = 0;
+    rafId = requestAnimationFrame(idleLoop);
+  </script>
+</body>
+</html>
