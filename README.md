@@ -1,7 +1,6 @@
 # CAMIKAZE: O Voo da Capitã Camila ✈️
 
 > **Builders League Edition LATAM 2026** — Uma evolução e customização completa do projeto base **Flappy Kiro**.
-
 Um jogo retrô de navegação contínua no navegador, desenvolvido em HTML5, Vanilla JavaScript e Canvas API. Pilote a Capitã Camila desviando de arranha-céus, coletando estrelas e ativando power-ups em um cenário noturno dinâmico!
 
 ![Camikaze Game UI](img/example-ui.png)
